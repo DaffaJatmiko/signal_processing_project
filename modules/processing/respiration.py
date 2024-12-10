@@ -1,40 +1,55 @@
-import numpy as np
 import cv2
-from mediapipe import solutions
-from mediapipe.framework.formats import landmark_pb2
-from tqdm import tqdm
-from modules.processing.filters import apply_filter  # Import filter function
+import numpy as np
+import mediapipe as mp
 
-def extract_respiration_signal(frames):
-    """
-    Extract respiration signal from webcam frames using MediaPipe.
-    Args:
-        frames (list): List of frames from webcam.
-    Returns:
-        np.ndarray: Processed respiration signal.
-    """
-    # Initialize MediaPipe Face Mesh
-    mp_face_mesh = solutions.face_mesh
-    with mp_face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1) as face_mesh:
-        signals = []
+def get_initial_roi(image, model_path, x_size, y_size, shift_x, shift_y):
+    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    height, width = image.shape[:2]
+    
+    # Create a list to store the detection result
+    detection_result = []
+    
+    def callback(result, output_image, timestamp_ms):
+        detection_result.append(result)
+    
+    # Setup landmarker for initial detection
+    options = mp.tasks.vision.PoseLandmarkerOptions(
+        base_options=mp.tasks.BaseOptions(model_asset_path=model_path),
+        running_mode=mp.tasks.vision.RunningMode.IMAGE
+    )
+    
+    with mp.tasks.vision.PoseLandmarker.create_from_options(options) as pose_detector:
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image_rgb)
+        detection_result = pose_detector.detect(mp_image)
+        
+        if not detection_result.pose_landmarks or len(detection_result.pose_landmarks) == 0:
+            raise ValueError("No pose detected!")
 
-        # Use tqdm to show progress for frame processing
-        for frame in tqdm(frames, desc="Processing frames", unit="frame"):
-            # Convert frame to RGB
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        landmarks = detection_result.pose_landmarks[0]
+        left_shoulder = landmarks[11]
+        right_shoulder = landmarks[12]
 
-            # Process frame and extract landmarks
-            results = face_mesh.process(frame_rgb)
-            if results.multi_face_landmarks:
-                for face_landmarks in results.multi_face_landmarks:
-                    # Access nose tip landmark using index
-                    nose_tip = face_landmarks.landmark[1]  # Example: Index 1 for nose tip
-                    signals.append(nose_tip.z)
+        center_x = int((left_shoulder.x + right_shoulder.x) * width / 2) + shift_x
+        center_y = int((left_shoulder.y + right_shoulder.y) * height / 2) + shift_y
 
-        # Convert to numpy array for easier manipulation
-        respiration_signal = np.array(signals)
+        left_x = max(0, center_x - x_size)
+        right_x = min(width, center_x + x_size)
+        top_y = max(0, center_y - y_size)
+        bottom_y = min(height, center_y + y_size)
 
-        # Apply filter to clean the respiration signal (optional)
-        filtered_respiration_signal = apply_filter(respiration_signal, lowcut=0.05, highcut=0.5, fs=30)
+        return left_x, top_y, right_x, bottom_y
+    
+def enhance_roi(roi):
+    """Meningkatkan kualitas ROI untuk tracking yang lebih baik"""
+    if roi is None or roi.size == 0:
+        return None
+        
+    # Convert to grayscale
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    # Apply CLAHE
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+    enhanced = clahe.apply(gray)
+    # Apply edge enhancement
+    enhanced = cv2.GaussianBlur(enhanced, (3,3), 0)
+    return enhanced
 
-        return filtered_respiration_signal

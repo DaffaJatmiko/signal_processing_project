@@ -1,28 +1,34 @@
-from modules.input.webcam import capture_webcam
-from modules.processing.rppg import extract_rppg
-from modules.processing.respiration import extract_respiration_signal
-from modules.visualization.plotter import plot_signal
+import os
+from modules.utils import download_model, check_gpu
+from modules.input.webcam import process_webcam
+from modules.processing.respiration import get_initial_roi
+from modules.visualization.plotter import plot_shoulder_movement
 
 
 def main():
-    print("Starting signal extraction...")
+    try:
+        # Download model
+        model_path = download_model()
 
-    # Capture webcam frames
-    frames = capture_webcam(frame_count=300)
+        # Check GPU availability
+        gpu_type = check_gpu()
 
-    # Extract rPPG signal
-    rppg_signal = extract_rppg(frames)
-    print("rPPG Signal Extracted")
+        # Process video from webcam
+        timestamps, y_positions = process_webcam(
+            model_path="models/pose_landmarker.task",
+            max_seconds=30,  # Waktu maksimum untuk merekam (dalam detik)
+            x_size=100,  # Ukuran ROI pada sumbu X
+            y_size=100,  # Ukuran ROI pada sumbu Y
+            shift_x=0,  # Perpindahan ROI pada sumbu X
+            shift_y=0  # Perpindahan ROI pada sumbu Y
+        )
 
-    # Extract respiration signal
-    respiration_signal = extract_respiration_signal(frames)
-    print("Respiration Signal Extracted")
+        # Plot shoulder movement
+        plot_shoulder_movement(timestamps, y_positions)
 
-    # Visualize rPPG signal
-    plot_signal(rppg_signal, title="rPPG Signal", xlabel="Time (frames)", ylabel="Amplitude")
-
-    # Visualize respiration signal
-    plot_signal(respiration_signal, title="Respiration Signal", xlabel="Time (frames)", ylabel="Amplitude")
+    except Exception as e:
+        print(f"Error: {e}")
+        raise
 
 
 if __name__ == "__main__":
