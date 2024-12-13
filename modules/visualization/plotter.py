@@ -2,7 +2,6 @@ import matplotlib.pyplot as plt
 import cv2
 import numpy as np
 
-
 def overlay_plot_on_frame(frame, timestamps, y_positions):
     if not timestamps or not y_positions:  # Skip if no data
         return frame
@@ -35,7 +34,6 @@ def overlay_plot_on_frame(frame, timestamps, y_positions):
     frame[10:10+new_h, w-new_w-10:w-10] = plot_img
     
     return frame
-
 
 def plot_shoulder_movement(timestamps, y_positions):
     plt.figure(figsize=(12, 6))
