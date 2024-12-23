@@ -17,7 +17,7 @@ def main():
         timestamps, y_positions = process_webcam(
             model_path="models/pose_landmarker.task",
             max_seconds=30,  # Waktu maksimum untuk merekam (dalam detik)
-            x_size=100,  # Ukuran ROI pada sumbu X
+            x_size=150,  # Ukuran ROI pada sumbu X
             y_size=100,  # Ukuran ROI pada sumbu Y
             shift_x=0,  # Perpindahan ROI pada sumbu X
             shift_y=0  # Perpindahan ROI pada sumbu Y

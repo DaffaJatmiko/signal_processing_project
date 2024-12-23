@@ -1,19 +1,32 @@
+# respiration.py
 import time
 import cv2
 import numpy as np
 import mediapipe as mp
 
 def get_initial_roi(image, model_path, x_size, y_size, shift_x, shift_y):
+    """
+    Detects the initial Region of Interest (ROI) for respiration tracking using MediaPipe.
+
+    Parameters:
+    - image: The input image (BGR format).
+    - model_path: Path to the MediaPipe model for pose detection.
+    - x_size: Width of the ROI to be extracted.
+    - y_size: Height of the ROI to be extracted.
+    - shift_x: Horizontal shift to apply to the center of the ROI.
+    - shift_y: Vertical shift to apply to the center of the ROI.
+
+    Returns:
+    - left_x: The left x-coordinate of the ROI.
+    - top_y: The top y-coordinate of the ROI.
+    - right_x: The right x-coordinate of the ROI.
+    - bottom_y: The bottom y-coordinate of the ROI.
+    """
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     height, width = image.shape[:2]
     
-    # Create a list to store the detection result
     detection_result = []
     
-    def callback(result, output_image, timestamp_ms):
-        detection_result.append(result)
-    
-    # Setup landmarker for initial detection
     options = mp.tasks.vision.PoseLandmarkerOptions(
         base_options=mp.tasks.BaseOptions(model_asset_path=model_path),
         running_mode=mp.tasks.vision.RunningMode.IMAGE
@@ -39,47 +52,125 @@ def get_initial_roi(image, model_path, x_size, y_size, shift_x, shift_y):
         bottom_y = min(height, center_y + y_size)
 
         return left_x, top_y, right_x, bottom_y
-    
+
+class FlowTracker:
+    """
+    Class to track flow positions based on detected points in the ROI.
+
+    Attributes:
+    - history_size: The number of previous positions to consider for smoothing.
+    - last_positions: The last known positions of tracked points.
+    - last_y_pos: The last calculated Y position for respiration.
+    - smoothing_window: A list to store previous Y positions for smoothing.
+
+    Methods:
+    - get_flow_position(points, roi_coords): Calculates the smoothed Y position based on tracked points.
+    """
+    def __init__(self, history_size=8):  
+        self.history_size = history_size
+        self.last_positions = None
+        self.last_y_pos = None
+        self.smoothing_window = []
+        
+    def get_flow_position(self, points, roi_coords):
+        """
+        Calculates the flow position based on the tracked points within the ROI.
+
+        Parameters:
+        - points: List of detected points (x, y) within the ROI.
+        - roi_coords: Coordinates of the ROI (left_x, top_y, right_x, bottom_y).
+
+        Returns:
+        - smoothed_y: The smoothed Y position based on valid points.
+        """
+        if len(points) == 0:
+            return self.last_y_pos
+            
+        left_x, top_y, right_x, bottom_y = roi_coords
+        width = right_x - left_x
+        
+        # Kembalikan bobot yang lebih seimbang
+        zone_weights = {'left': 0.5, 'center': 1.0, 'right': 0.5}
+        
+        zones = {
+            'left': (left_x, left_x + width/3),
+            'center': (left_x + width/3, left_x + 2*width/3),
+            'right': (left_x + 2*width/3, right_x)
+        }
+        
+        zone_positions = {'left': [], 'center': [], 'right': []}
+        
+        for point in points:
+            x, y = point.ravel()
+            for zone_name, (zone_left, zone_right) in zones.items():
+                if zone_left <= x <= zone_right:
+                    zone_positions[zone_name].append(y)
+                    break
+        
+        weighted_sum = 0
+        total_weight = 0
+        
+        for zone_name, positions in zone_positions.items():
+            if positions:
+                zone_y = np.median(positions)
+                weighted_sum += zone_y * zone_weights[zone_name]
+                total_weight += zone_weights[zone_name]
+        
+        if total_weight > 0:
+            y_pos = weighted_sum / total_weight
+            
+            self.smoothing_window.append(y_pos)
+            if len(self.smoothing_window) > self.history_size:
+                self.smoothing_window.pop(0)
+            
+            # Gunakan weighted average yang lebih ringan
+            weights = np.linspace(0.5, 1.0, len(self.smoothing_window))
+            weights /= weights.sum()
+            smoothed_y = np.average(self.smoothing_window, weights=weights)
+            
+            self.last_y_pos = smoothed_y
+            return smoothed_y
+            
+        return self.last_y_pos
+
 def process_frame(frame, tracking_data):
-    """Process frame for respiration tracking"""
+    """
+    Processes a single video frame for respiration tracking.
+
+    Parameters:
+    - frame: The current video frame (BGR format).
+    - tracking_data: A dictionary containing tracking information, including:
+        - 'flow_tracker': Instance of FlowTracker.
+        - 'roi_coords': Coordinates of the ROI.
+        - 'features': Detected features in the ROI.
+        - 'old_gray': Previous grayscale frame for optical flow calculation.
+
+    Returns:
+    - frame: The processed frame with visual indicators.
+    - y_pos: The calculated Y position for respiration.
+    """
     frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     y_pos = None
     
-    if len(tracking_data['features']) > 10:
-        # Calculate optical flow
-        new_features, status, error = cv2.calcOpticalFlowPyrLK(
-            tracking_data['old_gray'], 
-            frame_gray, 
-            tracking_data['features'], 
-            None,
-            **tracking_data['lk_params']
-        )
-        
-        if new_features is not None:
-            # Select good points
-            good_old = tracking_data['features'][status == 1]
-            good_new = new_features[status == 1]
-            
-            # Calculate zone-based position
-            y_pos = calculate_zone_based_position(good_new, tracking_data['roi_coords'])
-            
-            # Draw visualization
-            frame = draw_zones_and_points(frame, tracking_data['roi_coords'], good_new)
-            
-            # Update features for next frame
-            tracking_data['features'] = good_new.reshape(-1, 1, 2)
-        
-        # Update old frame
-        tracking_data['old_gray'] = frame_gray.copy()
-    else:
-        # Reinitialize features if needed
+    if 'flow_tracker' not in tracking_data:
+        tracking_data['flow_tracker'] = FlowTracker()
+    
+    if len(tracking_data.get('features', [])) < 25:
         roi = frame_gray[tracking_data['roi_coords'][1]:tracking_data['roi_coords'][3],
                         tracking_data['roi_coords'][0]:tracking_data['roi_coords'][2]]
-        new_features = cv2.goodFeaturesToTrack(roi, 
-                                             maxCorners=60,
-                                             qualityLevel=0.15,
-                                             minDistance=3,
-                                             blockSize=7)
+        
+        # Enhanced pre-processing
+        roi_enhanced = cv2.equalizeHist(roi)
+        roi_enhanced = cv2.GaussianBlur(roi_enhanced, (5,5), 0)
+        
+        new_features = cv2.goodFeaturesToTrack(
+            roi_enhanced, 
+            maxCorners=50,  
+            qualityLevel=0.15,  
+            minDistance=7,  
+            blockSize=7
+        )
+        
         if new_features is not None:
             new_features = new_features + np.array(
                 [[tracking_data['roi_coords'][0], tracking_data['roi_coords'][1]]], 
@@ -87,111 +178,82 @@ def process_frame(frame, tracking_data):
             )
             tracking_data['features'] = new_features
     
+    if len(tracking_data.get('features', [])) > 0:
+        new_features, status, error = cv2.calcOpticalFlowPyrLK(
+            tracking_data['old_gray'], 
+            frame_gray, 
+            tracking_data['features'], 
+            None,
+            winSize=(21,21), 
+            maxLevel=2,
+            criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03)
+        )
+        
+        if new_features is not None:
+            good_new = new_features[status == 1]
+            
+            y_pos = tracking_data['flow_tracker'].get_flow_position(
+                good_new, tracking_data['roi_coords']
+            )
+            
+            frame = draw_flow_zones(frame, tracking_data['roi_coords'], good_new)
+            tracking_data['features'] = good_new.reshape(-1, 1, 2)
+    
+    tracking_data['old_gray'] = frame_gray.copy()
     return frame, y_pos
 
-def calculate_zone_based_position(points, roi_coords):
-    """Calculate weighted average y-position using zones"""
+def draw_flow_zones(frame, roi_coords, points):
+    """
+    Draws vertical zones and flow indicators on the frame.
+
+    Parameters:
+    - frame: The current video frame (BGR format).
+    - roi_coords: Coordinates of the ROI (left_x, top_y, right_x, bottom_y).
+    - points: List of tracked points to visualize.
+
+    Returns:
+    - frame: The frame with drawn zones and points.
+    """
     left_x, top_y, right_x, bottom_y = roi_coords
     width = right_x - left_x
-    height = bottom_y - top_y
     
-    # Bagi ROI menjadi 3 zona vertikal
-    zone_width = width // 3
-    zones = {
-        'left': [],
-        'center': [],
-        'right': []
-    }
+    # Draw main ROI
+    cv2.rectangle(frame, (left_x, top_y), (right_x, bottom_y), (0, 255, 0), 2)
     
-    # Assign points ke zona yang sesuai
-    for point in points:
-        x, y = point.ravel()
-        relative_x = x - left_x
-        
-        if relative_x < zone_width:
-            zones['left'].append(y)
-        elif relative_x < 2 * zone_width:
-            zones['center'].append(y)
-        else:
-            zones['right'].append(y)
+    # Draw vertical zones
+    for i in range(1, 3):
+        x = left_x + (width * i // 3)
+        cv2.line(frame, (x, top_y), (x, bottom_y), (0, 255, 255), 1)
     
-    # Hitung weighted average dengan bobot yang lebih tinggi untuk zona tengah
-    weights = {'left': 0.25, 'center': 0.5, 'right': 0.25}
-    total_y = 0
-    total_weight = 0
-    
-    for zone_name, points in zones.items():
-        if points:  # Jika ada points di zona ini
-            zone_avg = np.mean(points)
-            weight = weights[zone_name] * len(points)
-            total_y += zone_avg * weight
-            total_weight += weight
-    
-    if total_weight > 0:
-        return total_y / total_weight
-    return None
-
-def draw_zones_and_points(frame, roi_coords, good_new):
-    """
-    Menggambar zona dan titik-titik dengan warna berbeda
-    """
-    left_x, top_y, right_x, bottom_y = roi_coords
-    roi_height = bottom_y - top_y
-    zone_height = roi_height // 3
-
-    # Buat overlay untuk zona dengan transparansi
-    overlay = frame.copy()
-    
-    # Gambar zona dengan warna berbeda (BGR format)
-    # Zona atas (merah muda transparan)
-    cv2.rectangle(overlay, 
-                 (left_x, top_y), 
-                 (right_x, top_y + zone_height),
-                 (147, 20, 255), -1)  # Pink
-    
-    # Zona tengah (hijau transparan)
-    cv2.rectangle(overlay, 
-                 (left_x, top_y + zone_height), 
-                 (right_x, top_y + 2*zone_height),
-                 (0, 255, 0), -1)  # Green
-    
-    # Zona bawah (biru transparan)
-    cv2.rectangle(overlay, 
-                 (left_x, top_y + 2*zone_height), 
-                 (right_x, bottom_y),
-                 (255, 191, 0), -1)  # Blue
-    
-    # Aplikasikan transparansi
-    alpha = 0.3
-    frame = cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
-    
-    # Gambar titik-titik dengan warna sesuai zonanya
-    for point in good_new:
-        x, y = point.ravel()
-        relative_y = y - top_y
-        
-        if relative_y < zone_height:  # zona atas
-            color = (147, 20, 255)  # Pink
-        elif relative_y < 2 * zone_height:  # zona tengah
-            color = (0, 255, 0)  # Green
-        else:  # zona bawah
-            color = (255, 191, 0)  # Blue
+    # Draw points with zone-based colors
+    if points is not None:
+        for point in points:
+            x, y = point.ravel()
+            x, y = int(x), int(y)
             
-        cv2.circle(frame, (int(x), int(y)), 4, color, -1)
-    
-    # Tambahkan label zona dan bobot
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    cv2.putText(frame, "Top Zone (0.2)", (right_x + 10, top_y + zone_height//2), 
-                font, 0.5, (147, 20, 255), 2)
-    cv2.putText(frame, "Middle Zone (0.5)", (right_x + 10, top_y + 3*zone_height//2), 
-                font, 0.5, (0, 255, 0), 2)
-    cv2.putText(frame, "Bottom Zone (0.3)", (right_x + 10, top_y + 5*zone_height//2), 
-                font, 0.5, (255, 191, 0), 2)
+            # Determine zone
+            rel_x = x - left_x
+            if rel_x < width/3:
+                color = (0, 165, 255)  # Orange for left
+            elif rel_x < 2*width/3:
+                color = (0, 0, 255)    # Red for center
+            else:
+                color = (0, 165, 255)  # Orange for right
+                
+            cv2.circle(frame, (x, y), 3, color, -1)
     
     return frame
 
 def enhance_roi(roi):
-    """Meningkatkan kualitas ROI untuk tracking yang lebih baik"""
+    """
+    Enhances the quality of the ROI for better tracking.
+
+    Parameters:
+    - roi: The Region of Interest (ROI) image (BGR format).
+
+    Returns:
+    - enhanced: The enhanced ROI image (grayscale).
+    """
     if roi is None or roi.size == 0:
         return None
         
