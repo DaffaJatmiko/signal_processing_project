@@ -7,6 +7,7 @@ import mediapipe as mp
 import cv2
 import matplotlib.pyplot as plt
 import scipy.signal as signal
+import time
 
 def cpu_POS(signal, fps):
     eps = 10**-9
@@ -34,90 +35,7 @@ def cpu_POS(signal, fps):
         H[:, m:(n + 1)] = np.add(H[:, m:(n + 1)], Hnm)
     return H
 
-def main():
-    # Initialize MediaPipe Face Mesh
-    mp_face_mesh = mp.solutions.face_mesh
-    face_mesh = mp_face_mesh.FaceMesh(
-        static_image_mode=False,
-        max_num_faces=1,
-        refine_landmarks=True,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5,
-    )
-
-    # Change video source to webcam (use 0 for default webcam)
-    cap = cv2.VideoCapture(0)
-
-    # Check if the webcam is accessible
-    if not cap.isOpened():
-        print("Error: Webcam not accessible.")
-        return
-
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30  # Use default FPS if not available
-    r_signal, g_signal, b_signal = [], [], []
-    frame_count = 0
-
-    try:
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                print("Failed to capture frame from webcam. Exiting...")
-                break
-
-            # Convert frame to RGB
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = face_mesh.process(frame_rgb)
-
-            # Detect face mesh and extract ROI
-            if results.multi_face_landmarks:
-                for face_landmarks in results.multi_face_landmarks:
-                    # Use the region around the nose tip (landmark 1) for ROI
-                    nose_tip = face_landmarks.landmark[1]
-                    h, w, _ = frame.shape
-                    cx, cy = int(nose_tip.x * w), int(nose_tip.y * h)
-
-                    # Define a bounding box around the nose tip
-                    bbox_size = 70  # Adjust the size as needed
-                    x1, y1 = max(0, cx - bbox_size), max(0, cy - bbox_size)
-                    x2, y2 = min(w, cx + bbox_size), min(h, cy + bbox_size)
-
-                    # Extract and process ROI
-                    roi = frame[y1:y2, x1:x2]
-                    if roi.size > 0:
-                        r_signal.append(np.mean(roi[:, :, 0]))
-                        g_signal.append(np.mean(roi[:, :, 1]))
-                        b_signal.append(np.mean(roi[:, :, 2]))
-
-                    # Draw the bounding box around the ROI
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-                    # Draw the facial landmarks (optional)
-                    mp.solutions.drawing_utils.draw_landmarks(
-                        frame,
-                        face_landmarks,
-                        mp_face_mesh.FACEMESH_CONTOURS,
-                        mp.solutions.drawing_utils.DrawingSpec(color=(0, 255, 0), thickness=1, circle_radius=1),
-                        mp.solutions.drawing_utils.DrawingSpec(color=(255, 0, 0), thickness=1, circle_radius=1),
-                    )
-
-            # Display the frame with bounding box and landmarks
-            cv2.imshow('Webcam Feed', frame)
-
-            # Exit on 'q' key
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-
-            frame_count += 1
-
-        cap.release()
-        cv2.destroyAllWindows()
-
-    except Exception as e:
-        cap.release()
-        cv2.destroyAllWindows()
-        print(f"Error: {e}")
-
-    # Process rPPG Signal
+def process_rppg_signals(r_signal, g_signal, b_signal, fps):
     if len(r_signal) > 0:
         rgb_signals = np.array([r_signal, g_signal, b_signal])
         rgb_signals = rgb_signals.reshape(1, 3, -1)
@@ -136,15 +54,120 @@ def main():
 
         print(f"Heart Rate: {heart_rate:.2f} BPM")
 
-        # Visualization
-        plt.figure(figsize=(20, 5))
-        plt.plot(filtered_rppg, color='black')
-        plt.plot(peaks, filtered_rppg[peaks], 'x', color='red')
-        plt.title(f'Heart Rate: {heart_rate:.2f} BPM')
-        plt.tight_layout()
-        plt.show()
+        return filtered_rppg, heart_rate
     else:
         print("No rPPG signal extracted. Please ensure a face is visible in the webcam feed.")
+        return None, None
+
+def main():
+    # Initialize MediaPipe Face Detection
+    mp_face_detection = mp.solutions.face_detection
+    face_detection = mp_face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.5)
+
+    # Change video source to webcam (use 0 for default webcam)
+    cap = cv2.VideoCapture(0)
+
+    # Set webcam FPS
+    cap.set(cv2.CAP_PROP_FPS, 30)
+
+    # Check if the webcam is accessible
+    if not cap.isOpened():
+        print("Error: Webcam not accessible.")
+        return
+
+    fps = 30  # Fixed FPS
+    r_signal, g_signal, b_signal = [], [], []
+    start_time = time.time()
+    timeout = 60  # Timeout after 1 minute
+    frame_count = 0
+    all_rppg_results = []
+
+    try:
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                print("Failed to capture frame from webcam. Exiting...")
+                break
+
+            # Convert frame to RGB
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = face_detection.process(frame_rgb)
+
+            # Detect face and extract ROI
+            if results.detections:
+                for detection in results.detections:
+                    bboxC = detection.location_data.relative_bounding_box
+                    h, w, _ = frame.shape
+                    x1, y1 = int(bboxC.xmin * w), int(bboxC.ymin * h)
+                    x2, y2 = int((bboxC.xmin + bboxC.width) * w), int((bboxC.ymin + bboxC.height) * h)
+
+                    # Define a tighter bounding box for the face
+                    bbox_size = int(1.0 * max(x2 - x1, y2 - y1))
+                    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+                    x1, y1 = max(0, cx - bbox_size // 2), max(0, cy - bbox_size // 2)
+                    x2, y2 = min(w, cx + bbox_size // 2), min(h, cy + bbox_size // 2)
+
+                    # Extract and process ROI
+                    roi = frame[y1:y2, x1:x2]
+                    if roi.size > 0:
+                        r_signal.append(np.mean(roi[:, :, 0]))
+                        g_signal.append(np.mean(roi[:, :, 1]))
+                        b_signal.append(np.mean(roi[:, :, 2]))
+
+                    # Draw the bounding box around the ROI
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+            # Display the frame with bounding box
+            cv2.imshow('Webcam Feed', frame)
+
+            frame_count += 1
+
+            # Process and print rPPG every 300 frames
+            if frame_count % 300 == 0:
+                print(f"Processing rPPG for frame batch {frame_count // 300}")
+                filtered_rppg, heart_rate = process_rppg_signals(r_signal, g_signal, b_signal, fps)
+                if filtered_rppg is not None:
+                    all_rppg_results.extend(filtered_rppg)
+                r_signal, g_signal, b_signal = [], [], []
+
+            # Break the loop after timeout
+            if (time.time() - start_time) > timeout:
+                break
+
+            # Exit on 'q' key
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+        cap.release()
+        cv2.destroyAllWindows()
+
+        # Plot the combined rPPG result
+        if all_rppg_results:
+            fs = int(fps)
+            time_axis = np.linspace(0, len(all_rppg_results) / fs, len(all_rppg_results))
+            
+            prominance = .5 * np.std(all_rppg_results)
+            peaks, _ = signal.find_peaks(all_rppg_results, prominence=prominance)
+
+            duration = len(all_rppg_results) / fs
+            heart_rate = 60 * len(peaks) / duration
+
+            print(f"Combined Heart Rate: {heart_rate:.2f} BPM")
+
+            plt.figure(figsize=(20, 5))
+            plt.plot(time_axis, all_rppg_results, color='black', label='rPPG Signal')
+            plt.plot(np.array(peaks) / fs, np.array(all_rppg_results)[peaks], 'r.', label='Detected Peaks')
+            plt.title(f'Combined rPPG Signal\nHeart Rate: {heart_rate:.2f} BPM')
+            plt.xlabel('Time (s)')
+            plt.ylabel('Amplitude')
+            plt.legend()
+            plt.tight_layout()
+            plt.show()
+
+    except Exception as e:
+        cap.release()
+        cv2.destroyAllWindows()
+        print(f"Error: {e}")
 
 if __name__ == '__main__':
     main()
