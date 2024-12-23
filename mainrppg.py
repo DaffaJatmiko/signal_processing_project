@@ -41,10 +41,15 @@ def process_rppg_signals(r_signal, g_signal, b_signal, fps):
         rgb_signals = rgb_signals.reshape(1, 3, -1)
         rppg_signal = cpu_POS(rgb_signals, fps=fps).reshape(-1)
 
-        # Bandpass filter
+        # Chebyshev filter
         fs = int(fps)
         lowcut, highcut = 0.9, 2.4
-        b, a = signal.butter(3, [lowcut, highcut], btype='band', fs=fs)
+
+        # Design a Chebyshev Type I filter
+        ripple = 0.5  # Passband ripple in dB
+        b, a = signal.cheby1(N=3, rp=ripple, Wn=[lowcut, highcut], btype='band', fs=fs)
+        
+        # Apply Filters
         filtered_rppg = signal.filtfilt(b, a, rppg_signal)
 
         # Heart rate calculation
@@ -98,24 +103,45 @@ def main():
                 for detection in results.detections:
                     bboxC = detection.location_data.relative_bounding_box
                     h, w, _ = frame.shape
-                    x1, y1 = int(bboxC.xmin * w), int(bboxC.ymin * h)
-                    x2, y2 = int((bboxC.xmin + bboxC.width) * w), int((bboxC.ymin + bboxC.height) * h)
 
-                    # Define a tighter bounding box for the face
-                    bbox_size = int(1.0 * max(x2 - x1, y2 - y1))
-                    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-                    x1, y1 = max(0, cx - bbox_size // 2), max(0, cy - bbox_size // 2)
-                    x2, y2 = min(w, cx + bbox_size // 2), min(h, cy + bbox_size // 2)
+                    # Bounding box for the face (relative to the full frame)
+                    face_x1 = int(bboxC.xmin * w)
+                    face_y1 = int(bboxC.ymin * h)
+                    face_x2 = int((bboxC.xmin + bboxC.width) * w)
+                    face_y2 = int((bboxC.ymin + bboxC.height) * h)
+
+                    # Face dimensions
+                    face_width = face_x2 - face_x1
+                    face_height = face_y2 - face_y1
+                    
+                    # ROI Dimensions based on proportions
+                    roi_width = int(0.4 * face_width)  # 40% of face width
+                    roi_height = int(0.3 * face_height)  # 30% of face height
+                    
+                    # ROI Position (10% above face bounding box and centered)
+                    roi_x1 = face_x1 + int(0.3 * face_width)  # 30% offset from the left
+                    roi_y1 = face_y1 - int(0.1 * face_height)  # 10% above the top of the bounding box
+                    roi_x2 = roi_x1 + roi_width
+                    roi_y2 = roi_y1 + roi_height
+
+                    # Ensure ROI stays within frame boundaries
+                    roi_x1 = max(0, roi_x1)
+                    roi_y1 = max(0, roi_y1)
+                    roi_x2 = min(w, roi_x2)
+                    roi_y2 = min(h, roi_y2)
 
                     # Extract and process ROI
-                    roi = frame[y1:y2, x1:x2]
+                    roi = frame[roi_y1:roi_y2, roi_x1:roi_x2]
                     if roi.size > 0:
                         r_signal.append(np.mean(roi[:, :, 0]))
                         g_signal.append(np.mean(roi[:, :, 1]))
                         b_signal.append(np.mean(roi[:, :, 2]))
 
                     # Draw the bounding box around the ROI
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    cv2.rectangle(frame, (roi_x1, roi_y1), (roi_x2, roi_y2), (0, 255, 0), 2)
+
+                    # Draw the face bounding box (optional for visualization)
+                    cv2.rectangle(frame, (face_x1, face_y1), (face_x2, face_y2), (255, 0, 0), 2)
 
             # Display the frame with bounding box
             cv2.imshow('Webcam Feed', frame)
