@@ -162,6 +162,6 @@ Proyek ini bersifat open-source dan tersedia di bawah Lisensi MIT.
 
 ## Anggota Kelompok DSP (IF3024)
 
-1. Ihsan Triyadi (121140163)
-2. Andreas Sihotang (121140168)
-3. Daffa Abdurrahman Jatmiko (121140181)
+1. Ihsan Triyadi (121140163) - IT131313
+2. Andreas Sihotang (121140168) - BangKumish
+3. Daffa Abdurrahman Jatmiko (121140181) - DaffaJatmiko
