@@ -15,7 +15,7 @@ def overlay_plot_on_frame(frame, timestamps, y_positions):
     ax.plot(timestamps, y_positions, "g-", linewidth=2)
     ax.set_xlabel("Time (seconds)")
     ax.set_ylabel("Y Position (pixels)")
-    ax.set_title("Shoulder Movement")
+    ax.set_title("Real-time Respiratory Tracking")
 
     # Convert plot to image
     fig.canvas.draw()
@@ -71,7 +71,7 @@ def plot_shoulder_movement(timestamps, y_positions):
         
         plt.xlabel('Time (seconds)')
         plt.ylabel('Y Position (pixels)')
-        plt.title(f'Shoulder Movement Over Time\nEstimated Respiratory Rate: {breaths_per_minute:.1f} breaths/min')
+        plt.title(f'Respiratory Movement Analysis\nEstimated Respiratory Rate: {breaths_per_minute:.1f} breaths/min')
         plt.legend()
         plt.grid(True)
         plt.show()
