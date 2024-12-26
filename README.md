@@ -2,6 +2,8 @@
 
 Proyek ini menyediakan implementasi untuk ekstraksi sinyal Photoplethysmography jarak jauh (rPPG) dan sinyal respirasi menggunakan webcam. Program ini mendeteksi wajah manusia, mengekstrak wilayah minat (ROI) berdasarkan deteksi wajah, dan memproses data piksel untuk menghitung detak jantung serta sinyal respirasi.
 
+Project ini dibuat sebagai Tugas Akhir Mata Kuliah Pemrosesan Sinyal Digital (IF3024) yang diampu oleh bapak Martin C.T. Manullang S.T., M.T.
+
 ## Instalasi
 
 1. Pastikan Python 3.x terinstal di sistem Anda.
