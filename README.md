@@ -4,8 +4,6 @@ Proyek ini mengimplementasikan Photoplethysmography Jarak Jauh (rPPG) dan ekstra
 
 Proyek ini dikembangkan sebagai Tugas Akhir Mata Kuliah Pemrosesan Sinyal Digital (IF3024) yang dibimbing oleh Bapak Martin C.T. Manullang S.T., M.T.
 
-Project ini dibuat sebagai Tugas Akhir Mata Kuliah Pemrosesan Sinyal Digital (IF3024) yang diampu oleh bapak Martin C.T. Manullang S.T., M.T.
-
 ## Instalasi
 
 1. Pastikan Python 3.x terinstal di sistem Anda.
